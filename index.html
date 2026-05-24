@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Local Markdown Reviewer</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">LM</span>
+        <div>
+          <h1>Local Markdown Reviewer</h1>
+          <p id="repoStatus">フォルダ未選択</p>
+        </div>
+      </div>
+      <div class="toolbar">
+        <button id="openFolderButton" type="button">フォルダを開く</button>
+        <button id="reopenFolderButton" type="button" disabled>前回のフォルダを開く</button>
+        <button id="saveButton" type="button" disabled>保存</button>
+        <button id="themeToggleButton" type="button">ダーク</button>
+        <details class="help-menu">
+          <summary>ヘルプ</summary>
+          <div class="help-panel">
+            <h2>操作説明</h2>
+            <dl>
+              <dt>フォルダを開く</dt>
+              <dd>レビュー対象の Markdown があるフォルダを選択します。コメントはフォルダ内の .local-markdown-reviewer に自動保存されます。</dd>
+              <dt>Git branch 表示</dt>
+              <dd>選択したフォルダが Git リポジトリの場合、上部に現在の branch を表示します。</dd>
+              <dt>コメント追加</dt>
+              <dd>本文の行番号をクリック、または本文を選択してからコメントを追加します。</dd>
+              <dt>対象へ移動</dt>
+              <dd>コメント一覧から対象行へ移動します。編集モード中は編集欄の対象行を選択します。</dd>
+              <dt>返信と解決</dt>
+              <dd>コメントには返信を追加できます。対応済みになったものは解決済みに変更できます。</dd>
+              <dt>本文編集</dt>
+              <dd>編集ボタンで Markdown 本文を直接編集できます。保存すると表示とコメント位置を再計算します。</dd>
+              <dt>目次と表示設定</dt>
+              <dd>見出しがあるファイルでは目次を表示できます。表示サイズ、行番号、コメント表示はその他メニューから変更できます。</dd>
+            </dl>
+          </div>
+        </details>
+        <details class="more-menu">
+          <summary aria-label="その他の操作">...</summary>
+          <div class="more-menu-panel">
+            <label class="menu-check">
+              <input id="showBlankLinesInput" type="checkbox">
+              空行番号を表示
+            </label>
+            <label class="menu-check">
+              <input id="hideLineNumbersInput" type="checkbox">
+              行番号を非表示
+            </label>
+            <label class="menu-check">
+              <input id="hideCommentsInput" type="checkbox">
+              コメントを非表示
+            </label>
+            <label class="menu-field">
+              表示サイズ
+              <select id="previewFontSizeSelect">
+                <option value="small">小</option>
+                <option value="normal">標準</option>
+                <option value="large">大</option>
+                <option value="xlarge">特大</option>
+              </select>
+            </label>
+            <label class="menu-field">
+              コメントサイズ
+              <select id="commentFontSizeSelect">
+                <option value="small">小</option>
+                <option value="normal">標準</option>
+                <option value="large">大</option>
+                <option value="xlarge">特大</option>
+              </select>
+            </label>
+            <button id="downloadButton" type="button">コメントJSONをダウンロード</button>
+            <button id="downloadCsvButton" type="button">コメントCSVをダウンロード</button>
+            <label class="file-import">
+              コメントJSONを読み込み
+              <input id="importInput" type="file" accept="application/json,.json">
+            </label>
+          </div>
+        </details>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="sidebar">
+        <div class="panel-head">
+          <h2>Markdown</h2>
+          <span id="fileCount">0</span>
+        </div>
+        <div id="fileList" class="file-list" aria-live="polite"></div>
+      </aside>
+
+      <section class="viewer">
+        <div class="document-bar">
+          <div>
+            <h2 id="currentFileName">ファイルを選択してください</h2>
+            <p id="currentFileMeta">Markdown ファイルがここに表示されます</p>
+          </div>
+          <div class="document-actions">
+            <button id="editMarkdownButton" type="button" disabled>編集</button>
+            <button id="saveMarkdownButton" type="button" hidden>本文保存</button>
+            <button id="cancelMarkdownEditButton" type="button" hidden>キャンセル</button>
+            <button id="addCommentButton" type="button" disabled>コメント追加</button>
+          </div>
+        </div>
+        <details id="tocPanel" class="toc-panel" hidden>
+          <summary>目次</summary>
+          <nav id="tocList" class="toc-list"></nav>
+        </details>
+        <article id="markdownPreview" class="markdown-preview">
+          <p>まず `フォルダを開く` からレビュー対象のリポジトリを選択してください。</p>
+        </article>
+        <textarea id="markdownEditor" class="markdown-editor" hidden></textarea>
+      </section>
+
+      <aside class="comments">
+        <div class="panel-head">
+          <h2>コメント</h2>
+          <select id="commentFilter" aria-label="コメント表示">
+            <option value="open">未対応</option>
+            <option value="all">すべて</option>
+            <option value="resolved">解決済み</option>
+          </select>
+        </div>
+        <div id="commentList" class="comment-list" aria-live="polite"></div>
+      </aside>
+    </main>
+
+    <dialog id="commentDialog">
+      <form method="dialog" class="comment-form">
+        <h2>コメント追加</h2>
+        <label>
+          名前
+          <input id="authorInput" type="text" autocomplete="name" placeholder="reviewer">
+        </label>
+        <label>
+          対象テキスト
+          <textarea id="quoteInput" rows="3" readonly></textarea>
+        </label>
+        <label>
+          コメント
+          <textarea id="bodyInput" rows="6" required placeholder="確認したい点や修正案を書きます"></textarea>
+        </label>
+        <menu>
+          <button id="cancelDialogButton" value="cancel" type="submit" formnovalidate>キャンセル</button>
+          <button id="submitCommentButton" value="default" type="submit">追加</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <script src="app.js"></script>
+  </body>
+</html>

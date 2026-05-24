@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <base target="_top">
+    <title>Local Markdown Reviewer</title>
+    <?!= include("Styles"); ?>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">LM</span>
+        <div>
+          <h1>Local Markdown Reviewer</h1>
+          <p id="status">Google Drive フォルダを指定してください</p>
+        </div>
+      </div>
+      <div class="toolbar">
+        <button id="chooseFolderButton" type="button">フォルダ選択</button>
+        <button id="themeToggleButton" type="button">ダーク</button>
+        <details class="help-menu">
+          <summary>ヘルプ</summary>
+          <div class="help-panel">
+            <h2>操作説明</h2>
+            <dl>
+              <dt>フォルダ選択</dt>
+              <dd>Google Drive の Markdown フォルダを選択します。共有アイテムは検索から探せます。</dd>
+              <dt>IDから読み込み</dt>
+              <dd>Drive folder ID を直接入力して読み込めます。ID入力はその他メニュー内にあります。</dd>
+              <dt>コメント追加</dt>
+              <dd>本文の行番号をクリック、または本文を選択してからコメントを追加します。</dd>
+              <dt>対象へ移動</dt>
+              <dd>コメント一覧から対象行へ移動します。編集モード中は編集欄の対象行を選択します。</dd>
+              <dt>返信と解決</dt>
+              <dd>コメントには返信を追加できます。対応済みになったものは解決済みに変更できます。</dd>
+              <dt>本文編集</dt>
+              <dd>編集ボタンで Markdown 本文を直接編集できます。保存すると Drive 上のファイルを更新します。</dd>
+              <dt>目次と表示設定</dt>
+              <dd>見出しがあるファイルでは目次を表示できます。表示サイズ、行番号、コメント表示はその他メニューから変更できます。</dd>
+            </dl>
+          </div>
+        </details>
+        <details class="more-menu">
+          <summary aria-label="その他の操作">...</summary>
+          <div class="more-menu-panel">
+            <label class="menu-check">
+              <input id="showBlankLinesInput" type="checkbox">
+              空行番号を表示
+            </label>
+            <label class="menu-check">
+              <input id="hideLineNumbersInput" type="checkbox">
+              行番号を非表示
+            </label>
+            <label class="menu-check">
+              <input id="hideCommentsInput" type="checkbox">
+              コメントを非表示
+            </label>
+            <label class="menu-field">
+              表示サイズ
+              <select id="previewFontSizeSelect">
+                <option value="small">小</option>
+                <option value="normal">標準</option>
+                <option value="large">大</option>
+                <option value="xlarge">特大</option>
+              </select>
+            </label>
+            <label class="menu-field">
+              コメントサイズ
+              <select id="commentFontSizeSelect">
+                <option value="small">小</option>
+                <option value="normal">標準</option>
+                <option value="large">大</option>
+                <option value="xlarge">特大</option>
+              </select>
+            </label>
+            <input id="folderIdInput" type="text" placeholder="Drive folder ID">
+            <button id="loadFolderButton" type="button">IDから読み込み</button>
+            <button id="downloadCsvButton" type="button">コメントCSVをダウンロード</button>
+          </div>
+        </details>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="sidebar">
+        <div class="panel-head">
+          <h2>Markdown</h2>
+          <span id="fileCount">0</span>
+        </div>
+        <div id="fileList" class="file-list"></div>
+      </aside>
+
+      <section class="viewer">
+        <div class="document-bar">
+          <div>
+            <h2 id="currentFileName">ファイルを選択してください</h2>
+            <p id="currentFileMeta">Drive フォルダ内の Markdown を表示します</p>
+          </div>
+          <div class="document-actions">
+            <button id="editMarkdownButton" type="button" disabled>編集</button>
+            <button id="saveMarkdownButton" type="button" hidden>本文保存</button>
+            <button id="cancelMarkdownEditButton" type="button" hidden>キャンセル</button>
+            <button id="addCommentButton" type="button" disabled>コメント追加</button>
+          </div>
+        </div>
+        <details id="tocPanel" class="toc-panel" hidden>
+          <summary>目次</summary>
+          <nav id="tocList" class="toc-list"></nav>
+        </details>
+        <article id="markdownPreview" class="markdown-preview">
+          <p>Drive フォルダIDを入力して読み込んでください。</p>
+        </article>
+        <textarea id="markdownEditor" class="markdown-editor" hidden></textarea>
+      </section>
+
+      <aside class="comments">
+        <div class="panel-head">
+          <h2>コメント</h2>
+          <select id="commentFilter">
+            <option value="open">未対応</option>
+            <option value="all">すべて</option>
+            <option value="resolved">解決済み</option>
+          </select>
+        </div>
+        <div id="commentList" class="comment-list"></div>
+      </aside>
+    </main>
+
+    <dialog id="commentDialog">
+      <form method="dialog" class="comment-form">
+        <h2>コメント追加</h2>
+        <label>
+          名前
+          <input id="authorInput" type="text" placeholder="reviewer">
+        </label>
+        <label>
+          対象
+          <textarea id="quoteInput" rows="3" readonly></textarea>
+        </label>
+        <label>
+          コメント
+          <textarea id="bodyInput" rows="6" required></textarea>
+        </label>
+        <menu>
+          <button value="cancel" type="submit" formnovalidate>キャンセル</button>
+          <button value="default" type="submit">追加</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="folderDialog">
+      <div class="folder-dialog">
+        <div class="dialog-head">
+          <h2>Drive フォルダ選択</h2>
+          <button id="closeFolderDialogButton" type="button">閉じる</button>
+        </div>
+        <div class="folder-search">
+          <input id="folderSearchInput" type="text" placeholder="共有フォルダ名で検索">
+          <button id="folderSearchButton" type="button">検索</button>
+        </div>
+        <div id="folderBreadcrumb" class="folder-breadcrumb"></div>
+        <div id="folderList" class="folder-list"></div>
+        <menu>
+          <button id="selectCurrentFolderButton" type="button">このフォルダを選択</button>
+        </menu>
+      </div>
+    </dialog>
+
+    <script src="https://cdn.jsdelivr.net/npm/markdown-it@14/dist/markdown-it.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+    <?!= include("Client"); ?>
+  </body>
+</html>

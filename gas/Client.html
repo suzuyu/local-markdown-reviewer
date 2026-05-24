@@ -1,0 +1,1343 @@
+<script>
+(function () {
+  const CONTEXT_CHARS = 48;
+  const THEME_KEY = "local-markdown-reviewer-theme";
+  const SHOW_BLANK_LINES_KEY = "local-markdown-reviewer-show-blank-lines";
+  const HIDE_LINE_NUMBERS_KEY = "local-markdown-reviewer-hide-line-numbers";
+  const HIDE_COMMENTS_KEY = "local-markdown-reviewer-hide-comments";
+  const PREVIEW_FONT_SIZE_KEY = "local-markdown-reviewer-preview-font-size";
+  const COMMENT_FONT_SIZE_KEY = "local-markdown-reviewer-comment-font-size";
+  let markdownRenderer = null;
+  const state = {
+    folderId: getStoredValue("lmr-gas-folder-id") || "",
+    files: [],
+    currentFile: null,
+    currentText: "",
+    originalEditText: "",
+    events: [],
+    comments: [],
+    user: null,
+    selectedQuote: "",
+    selectedTarget: null
+  };
+
+  const els = {
+    status: document.getElementById("status"),
+    folderIdInput: document.getElementById("folderIdInput"),
+    chooseFolderButton: document.getElementById("chooseFolderButton"),
+    themeToggleButton: document.getElementById("themeToggleButton"),
+    showBlankLinesInput: document.getElementById("showBlankLinesInput"),
+    hideLineNumbersInput: document.getElementById("hideLineNumbersInput"),
+    hideCommentsInput: document.getElementById("hideCommentsInput"),
+    previewFontSizeSelect: document.getElementById("previewFontSizeSelect"),
+    commentFontSizeSelect: document.getElementById("commentFontSizeSelect"),
+    downloadCsvButton: document.getElementById("downloadCsvButton"),
+    loadFolderButton: document.getElementById("loadFolderButton"),
+    fileCount: document.getElementById("fileCount"),
+    fileList: document.getElementById("fileList"),
+    currentFileName: document.getElementById("currentFileName"),
+    currentFileMeta: document.getElementById("currentFileMeta"),
+    markdownPreview: document.getElementById("markdownPreview"),
+    markdownEditor: document.getElementById("markdownEditor"),
+    editMarkdownButton: document.getElementById("editMarkdownButton"),
+    saveMarkdownButton: document.getElementById("saveMarkdownButton"),
+    cancelMarkdownEditButton: document.getElementById("cancelMarkdownEditButton"),
+    addCommentButton: document.getElementById("addCommentButton"),
+    commentFilter: document.getElementById("commentFilter"),
+    tocPanel: document.getElementById("tocPanel"),
+    tocList: document.getElementById("tocList"),
+    commentList: document.getElementById("commentList"),
+    commentDialog: document.getElementById("commentDialog"),
+    authorInput: document.getElementById("authorInput"),
+    quoteInput: document.getElementById("quoteInput"),
+    bodyInput: document.getElementById("bodyInput"),
+    folderDialog: document.getElementById("folderDialog"),
+    closeFolderDialogButton: document.getElementById("closeFolderDialogButton"),
+    folderSearchInput: document.getElementById("folderSearchInput"),
+    folderSearchButton: document.getElementById("folderSearchButton"),
+    folderBreadcrumb: document.getElementById("folderBreadcrumb"),
+    folderList: document.getElementById("folderList"),
+    selectCurrentFolderButton: document.getElementById("selectCurrentFolderButton")
+  };
+
+  try {
+    applyTheme(getStoredValue(THEME_KEY) || "light");
+    applyBlankLineSetting(getStoredValue(SHOW_BLANK_LINES_KEY) === "true");
+    applyLineNumberSetting(getStoredValue(HIDE_LINE_NUMBERS_KEY) === "true");
+    applyCommentVisibility(getStoredValue(HIDE_COMMENTS_KEY) === "true");
+    applyPreviewFontSize(getStoredValue(PREVIEW_FONT_SIZE_KEY) || "normal");
+    applyCommentFontSize(getStoredValue(COMMENT_FONT_SIZE_KEY) || "normal");
+    els.folderIdInput.value = state.folderId;
+    els.chooseFolderButton.addEventListener("click", () => openFolderDialog().catch(showError));
+    els.themeToggleButton.addEventListener("click", toggleTheme);
+    els.showBlankLinesInput.addEventListener("change", () => {
+      setStoredValue(SHOW_BLANK_LINES_KEY, String(els.showBlankLinesInput.checked));
+      applyBlankLineSetting(els.showBlankLinesInput.checked);
+    });
+    els.hideLineNumbersInput.addEventListener("change", () => {
+      setStoredValue(HIDE_LINE_NUMBERS_KEY, String(els.hideLineNumbersInput.checked));
+      applyLineNumberSetting(els.hideLineNumbersInput.checked);
+    });
+    els.hideCommentsInput.addEventListener("change", () => {
+      setStoredValue(HIDE_COMMENTS_KEY, String(els.hideCommentsInput.checked));
+      applyCommentVisibility(els.hideCommentsInput.checked);
+    });
+    els.previewFontSizeSelect.addEventListener("change", () => {
+      setStoredValue(PREVIEW_FONT_SIZE_KEY, els.previewFontSizeSelect.value);
+      applyPreviewFontSize(els.previewFontSizeSelect.value);
+    });
+    els.commentFontSizeSelect.addEventListener("change", () => {
+      setStoredValue(COMMENT_FONT_SIZE_KEY, els.commentFontSizeSelect.value);
+      applyCommentFontSize(els.commentFontSizeSelect.value);
+    });
+    els.downloadCsvButton.addEventListener("click", downloadCommentsCsv);
+    els.loadFolderButton.addEventListener("click", () => loadFolder().catch(showError));
+    els.editMarkdownButton.addEventListener("click", startMarkdownEdit);
+    els.saveMarkdownButton.addEventListener("click", () => saveMarkdownEdit().catch(showError));
+    els.cancelMarkdownEditButton.addEventListener("click", cancelMarkdownEdit);
+    els.addCommentButton.addEventListener("click", openCommentDialog);
+    els.commentFilter.addEventListener("change", () => {
+      renderPreviewAnnotations();
+      renderComments();
+    });
+    els.commentDialog.addEventListener("close", () => handleDialogClose().catch(showError));
+    els.markdownPreview.addEventListener("mouseup", captureSelection);
+    els.markdownPreview.addEventListener("keyup", captureSelection);
+    els.markdownPreview.addEventListener("click", handlePreviewClick);
+    els.closeFolderDialogButton.addEventListener("click", () => els.folderDialog.close());
+    els.folderSearchButton.addEventListener("click", () => searchFolderPicker().catch(showError));
+    els.folderSearchInput.addEventListener("keydown", event => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        searchFolderPicker().catch(showError);
+      }
+    });
+    els.selectCurrentFolderButton.addEventListener("click", () => {
+      if (!state.pickerFolderId) {
+        return;
+      }
+      els.folderIdInput.value = state.pickerFolderId;
+      els.folderDialog.close();
+      loadFolder().catch(showError);
+    });
+  } catch (error) {
+    showError(error);
+  }
+
+  function gasRun(name, ...args) {
+    return new Promise((resolve, reject) => {
+      if (!window.google || !google.script || !google.script.run) {
+        reject(new Error("google.script.run が利用できません。GAS Webアプリとして開いてください。"));
+        return;
+      }
+      const runner = google.script.run.withSuccessHandler(resolve).withFailureHandler(reject);
+      runner[name].apply(runner, args);
+    });
+  }
+
+  function toggleTheme() {
+    const nextTheme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    setStoredValue(THEME_KEY, nextTheme);
+    applyTheme(nextTheme);
+  }
+
+  function applyTheme(theme) {
+    const normalizedTheme = theme === "dark" ? "dark" : "light";
+    document.documentElement.dataset.theme = normalizedTheme;
+    els.themeToggleButton.textContent = normalizedTheme === "dark" ? "ライト" : "ダーク";
+  }
+
+  function applyBlankLineSetting(showBlankLines) {
+    document.documentElement.dataset.showBlankLines = showBlankLines ? "true" : "false";
+    els.showBlankLinesInput.checked = showBlankLines;
+  }
+
+  function applyLineNumberSetting(hideLineNumbers) {
+    document.documentElement.dataset.hideLineNumbers = hideLineNumbers ? "true" : "false";
+    els.hideLineNumbersInput.checked = hideLineNumbers;
+  }
+
+  function applyCommentVisibility(hideComments) {
+    document.documentElement.dataset.hideComments = hideComments ? "true" : "false";
+    els.hideCommentsInput.checked = hideComments;
+  }
+
+  function applyPreviewFontSize(size) {
+    const normalizedSize = ["small", "normal", "large", "xlarge"].includes(size) ? size : "normal";
+    document.documentElement.dataset.previewFontSize = normalizedSize;
+    els.previewFontSizeSelect.value = normalizedSize;
+  }
+
+  function applyCommentFontSize(size) {
+    const normalizedSize = ["small", "normal", "large", "xlarge"].includes(size) ? size : "normal";
+    document.documentElement.dataset.commentFontSize = normalizedSize;
+    els.commentFontSizeSelect.value = normalizedSize;
+  }
+
+  async function loadFolder() {
+    const folderId = els.folderIdInput.value.trim();
+    if (!folderId) {
+      return;
+    }
+    setStatus("読み込み中...");
+    state.folderId = folderId;
+    setStoredValue("lmr-gas-folder-id", folderId);
+    const [files, reviewData] = await Promise.all([
+      gasRun("listMarkdownFiles", folderId),
+      gasRun("loadReviewData", folderId)
+    ]);
+    state.files = files;
+    state.events = reviewData.events || [];
+    state.user = reviewData.user;
+    state.comments = buildComments(state.events);
+    renderFiles();
+    renderComments();
+    setStatus(`${files.length} ファイル`);
+    if (files.length > 0) {
+      await selectFile(files[0].id);
+    }
+  }
+
+  async function openFolderDialog() {
+    els.folderDialog.showModal();
+    state.pickerPath = [];
+    await loadFolderPicker("");
+  }
+
+  async function loadFolderPicker(folderId) {
+    els.folderBreadcrumb.textContent = "読み込み中...";
+    els.folderList.innerHTML = "";
+    const data = await gasRun("listDriveFolders", folderId || "");
+    state.pickerFolderId = data.id;
+    state.pickerPath = updatePickerPath(state.pickerPath || [], data);
+    renderFolderPicker(data);
+  }
+
+  async function searchFolderPicker() {
+    const query = els.folderSearchInput.value.trim();
+    if (!query) {
+      return;
+    }
+    els.folderBreadcrumb.textContent = `検索: ${query}`;
+    els.folderList.innerHTML = '<p class="empty">検索中...</p>';
+    const folders = await gasRun("searchDriveFolders", query);
+    state.pickerFolderId = "";
+    state.pickerPath = [];
+    renderFolderSearchResults(folders);
+  }
+
+  function updatePickerPath(path, data) {
+    if (!path.length || data.name === "マイドライブ") {
+      return [{ id: data.id, name: data.name }];
+    }
+    const existingIndex = path.findIndex(item => item.id === data.id);
+    if (existingIndex >= 0) {
+      return path.slice(0, existingIndex + 1);
+    }
+    return path.concat({ id: data.id, name: data.name });
+  }
+
+  function renderFolderPicker(data) {
+    els.folderBreadcrumb.innerHTML = "";
+    state.pickerPath.forEach((item, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = item.name;
+      button.addEventListener("click", () => loadFolderPicker(index === 0 ? "" : item.id).catch(showError));
+      els.folderBreadcrumb.appendChild(button);
+      if (index < state.pickerPath.length - 1) {
+        els.folderBreadcrumb.appendChild(document.createTextNode(" / "));
+      }
+    });
+
+    els.folderList.innerHTML = "";
+    if (!data.folders || data.folders.length === 0) {
+      els.folderList.innerHTML = '<p class="empty">フォルダはありません。</p>';
+      return;
+    }
+    for (const folder of data.folders) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "folder-item";
+      button.textContent = folder.name;
+      button.addEventListener("click", () => loadFolderPicker(folder.id).catch(showError));
+      els.folderList.appendChild(button);
+    }
+  }
+
+  function renderFolderSearchResults(folders) {
+    els.folderList.innerHTML = "";
+    if (!folders || folders.length === 0) {
+      els.folderList.innerHTML = '<p class="empty">フォルダが見つかりません。</p>';
+      return;
+    }
+    for (const folder of folders) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "folder-item";
+      button.textContent = folder.name;
+      button.addEventListener("click", () => loadFolderPicker(folder.id).catch(showError));
+      els.folderList.appendChild(button);
+    }
+  }
+
+  async function selectFile(fileId) {
+    const file = state.files.find(item => item.id === fileId);
+    if (!file) {
+      return;
+    }
+    setStatus("Markdown 読み込み中...");
+    const data = await gasRun("getMarkdownFile", fileId);
+    state.currentFile = file;
+    state.currentText = data.text || "";
+    state.selectedQuote = "";
+    state.selectedTarget = null;
+    els.currentFileName.textContent = file.path;
+    els.currentFileMeta.textContent = `${state.currentText.length.toLocaleString()} 文字`;
+    els.addCommentButton.disabled = false;
+    els.editMarkdownButton.disabled = false;
+    setMarkdownEditMode(false);
+    renderFiles();
+    renderPreview();
+    renderComments();
+    setStatus(`${state.files.length} ファイル`);
+  }
+
+  function startMarkdownEdit() {
+    if (!state.currentFile) {
+      return;
+    }
+    state.originalEditText = state.currentText;
+    els.markdownEditor.value = state.currentText;
+    setMarkdownEditMode(true);
+    els.markdownEditor.focus();
+  }
+
+  async function saveMarkdownEdit() {
+    if (!state.currentFile) {
+      return;
+    }
+    setStatus("本文保存中...");
+    const data = await gasRun("saveMarkdownFile", state.currentFile.id, els.markdownEditor.value);
+    state.currentText = data.text || "";
+    els.currentFileMeta.textContent = `${state.currentText.length.toLocaleString()} 文字`;
+    setMarkdownEditMode(false);
+    renderPreview();
+    renderComments();
+    setStatus("本文保存済み");
+  }
+
+  function cancelMarkdownEdit() {
+    els.markdownEditor.value = state.originalEditText;
+    setMarkdownEditMode(false);
+  }
+
+  function setMarkdownEditMode(editing) {
+    els.markdownPreview.hidden = editing;
+    els.markdownEditor.hidden = !editing;
+    els.editMarkdownButton.hidden = editing;
+    els.saveMarkdownButton.hidden = !editing;
+    els.cancelMarkdownEditButton.hidden = !editing;
+    els.addCommentButton.disabled = editing || !state.currentFile;
+  }
+
+  function renderFiles() {
+    els.fileCount.textContent = String(state.files.length);
+    els.fileList.innerHTML = "";
+    if (state.files.length === 0) {
+      els.fileList.innerHTML = '<p class="empty">Markdown ファイルが見つかりません。</p>';
+      return;
+    }
+    for (const file of state.files) {
+      const button = document.createElement("button");
+      button.className = "file-item";
+      button.type = "button";
+      button.textContent = file.path;
+      button.addEventListener("click", () => selectFile(file.id));
+      if (state.currentFile && state.currentFile.id === file.id) {
+        button.classList.add("active");
+      }
+      els.fileList.appendChild(button);
+    }
+  }
+
+  function captureSelection() {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed) {
+      return;
+    }
+    if (!els.markdownPreview.contains(selection.anchorNode) || !els.markdownPreview.contains(selection.focusNode)) {
+      return;
+    }
+    const quote = selection.toString().trim();
+    if (!quote) {
+      return;
+    }
+    state.selectedQuote = quote;
+    state.selectedTarget = getSelectionTarget(selection, quote);
+    renderPreviewAnnotations();
+  }
+
+  function handlePreviewClick(event) {
+    const lineButton = event.target.closest("[data-comment-line]");
+    if (!lineButton) {
+      return;
+    }
+    const line = Number(lineButton.dataset.commentLine);
+    const text = getLineText(line);
+    state.selectedQuote = text || `L${line}`;
+    state.selectedTarget = {
+      type: "line",
+      startLine: line,
+      endLine: line,
+      anchor: createAnchor(line, line, text)
+    };
+    window.getSelection().removeAllRanges();
+    renderPreviewAnnotations();
+  }
+
+  function openCommentDialog() {
+    if (!state.currentFile) {
+      return;
+    }
+    captureSelection();
+    els.authorInput.value = state.user ? state.user.author : "";
+    els.quoteInput.value = formatTargetLabel(state.selectedTarget, state.selectedQuote || state.currentFile.path);
+    els.bodyInput.value = "";
+    els.commentDialog.showModal();
+    els.bodyInput.focus();
+  }
+
+  async function handleDialogClose() {
+    if (els.commentDialog.returnValue === "cancel") {
+      return;
+    }
+    const body = els.bodyInput.value.trim();
+    if (!body || !state.currentFile) {
+      return;
+    }
+    const now = new Date().toISOString();
+    const author = els.authorInput.value.trim() || (state.user ? state.user.author : "reviewer");
+    await addAndSaveEvent({
+      id: randomId(),
+      type: "comment:create",
+      author,
+      createdAt: now,
+      comment: {
+        id: randomId(),
+        file: state.currentFile.path,
+        quote: state.selectedQuote || els.quoteInput.value.trim(),
+        target: withAnchor(state.selectedTarget, state.selectedQuote || els.quoteInput.value.trim()),
+        body,
+        author,
+        status: "open",
+        createdAt: now,
+        updatedAt: now,
+        replies: []
+      }
+    });
+    state.selectedQuote = "";
+    state.selectedTarget = null;
+  }
+
+  async function addAndSaveEvent(event) {
+    setStatus("保存中...");
+    const data = await gasRun("appendReviewEvents", state.folderId, [event]);
+    state.events = data.events || [];
+    state.user = data.user;
+    state.comments = buildComments(state.events);
+    renderPreviewAnnotations();
+    renderComments();
+    setStatus("保存済み");
+  }
+
+  function renderPreview() {
+    ensureMarkdownRenderer();
+    els.markdownPreview.innerHTML = renderMarkdown(state.currentText);
+    renderPreviewAnnotations();
+    renderRelativeImages();
+    renderMermaidDiagrams();
+    renderTableOfContents();
+  }
+
+  function renderTableOfContents() {
+    const headings = getHeadings();
+    els.tocList.innerHTML = "";
+    els.tocPanel.hidden = headings.length === 0;
+    if (headings.length === 0) {
+      return;
+    }
+    for (const heading of headings) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `toc-item toc-level-${heading.level}`;
+      button.textContent = heading.text;
+      button.addEventListener("click", () => scrollToTarget({
+        startLine: heading.line,
+        endLine: heading.line
+      }));
+      els.tocList.appendChild(button);
+    }
+  }
+
+  function getHeadings() {
+    return getNormalizedText().split("\n").map((line, index) => {
+      const heading = line.match(/^(#{1,6})\s+(.+)$/);
+      if (!heading) {
+        return null;
+      }
+      return {
+        line: index + 1,
+        level: heading[1].length,
+        text: heading[2].replace(/[#\s]+$/g, "")
+      };
+    }).filter(Boolean);
+  }
+
+  function ensureMarkdownRenderer() {
+    if (!markdownRenderer && window.markdownit) {
+      markdownRenderer = window.markdownit({
+        html: false,
+        linkify: true,
+        typographer: false
+      });
+    }
+  }
+
+  async function renderRelativeImages() {
+    if (!state.folderId || !state.currentFile) {
+      return;
+    }
+    const images = els.markdownPreview.querySelectorAll("img[data-relative-src], img[src]");
+    for (const image of images) {
+      const relativeSrc = image.dataset.relativeSrc || image.getAttribute("src") || "";
+      if (!relativeSrc || isAbsoluteImageSource(relativeSrc)) {
+        continue;
+      }
+      try {
+        image.src = await gasRun("getImageDataUrl", state.folderId, state.currentFile.path, relativeSrc);
+        image.removeAttribute("data-relative-src");
+      } catch (error) {
+        image.classList.add("image-missing");
+        image.alt = image.alt || relativeSrc;
+        image.title = `画像を読み込めません: ${relativeSrc}`;
+      }
+    }
+  }
+
+  function isAbsoluteImageSource(value) {
+    return /^(https?:\/\/|data:image\/|blob:)/i.test(value);
+  }
+
+  function renderPreviewAnnotations() {
+    const filter = els.commentFilter.value;
+    const showResolved = filter === "all" || filter === "resolved";
+    for (const line of els.markdownPreview.querySelectorAll(".md-line")) {
+      line.classList.remove("has-comment", "has-resolved-comment", "selected-line");
+      line.removeAttribute("title");
+    }
+    if (!state.currentFile) {
+      return;
+    }
+    const counts = new Map();
+    for (const comment of state.comments) {
+      if (comment.file !== state.currentFile.path) {
+        continue;
+      }
+      if (comment.status === "resolved" && !showResolved) {
+        continue;
+      }
+      if (filter === "resolved" && comment.status !== "resolved") {
+        continue;
+      }
+      for (const lineNumber of getCommentLines(comment)) {
+        const count = counts.get(lineNumber) || { open: 0, resolved: 0 };
+        if (comment.status === "resolved") {
+          count.resolved += 1;
+        } else {
+          count.open += 1;
+        }
+        counts.set(lineNumber, count);
+      }
+    }
+    for (const [lineNumber, count] of counts) {
+      const line = getLineElement(lineNumber);
+      if (!line) {
+        continue;
+      }
+      line.classList.toggle("has-comment", count.open > 0);
+      line.classList.toggle("has-resolved-comment", count.open === 0 && count.resolved > 0);
+      line.title = `未対応 ${count.open} / 解決済み ${count.resolved}`;
+    }
+    for (const lineNumber of getTargetLines(state.selectedTarget)) {
+      const line = getLineElement(lineNumber);
+      if (line) {
+        line.classList.add("selected-line");
+      }
+    }
+  }
+
+  function renderComments() {
+    const filter = els.commentFilter.value;
+    let comments = state.currentFile ? state.comments.filter(comment => comment.file === state.currentFile.path) : state.comments;
+    if (filter !== "all") {
+      comments = comments.filter(comment => comment.status === filter);
+    }
+    comments = comments.slice().sort((a, b) => getTargetStartLine(a) - getTargetStartLine(b));
+    els.commentList.innerHTML = "";
+    if (comments.length === 0) {
+      els.commentList.innerHTML = '<p class="empty">表示するコメントはありません。</p>';
+      return;
+    }
+    comments.forEach(comment => els.commentList.appendChild(renderCommentCard(comment)));
+  }
+
+  function renderCommentCard(comment) {
+    const displayTarget = getDisplayTarget(comment);
+    const card = document.createElement("section");
+    card.className = `comment-card ${comment.status === "resolved" ? "resolved" : ""}`;
+    if (displayTarget.missing) {
+      card.classList.add("missing-target");
+    } else if (displayTarget.approximate) {
+      card.classList.add("approximate-target");
+    }
+    const meta = document.createElement("div");
+    meta.className = "comment-meta";
+    meta.textContent = `${comment.author} / ${formatDate(comment.createdAt)} / ${comment.status === "resolved" ? "解決済み" : "未対応"}`;
+    const quote = document.createElement("div");
+    quote.className = "comment-quote";
+    quote.textContent = displayTarget.missing
+      ? `位置不明 ${comment.quote}`
+      : displayTarget.approximate
+        ? `位置候補 ${formatTargetLabel(displayTarget.target, getSectionLabel(displayTarget.target) || comment.quote || comment.file)}`
+        : formatTargetLabel(displayTarget.target, comment.quote || comment.file);
+    const body = document.createElement("div");
+    body.className = "comment-body";
+    body.textContent = comment.body;
+    const replies = renderReplies(comment);
+    const replyForm = renderReplyForm(comment);
+    const actions = document.createElement("div");
+    actions.className = "comment-actions";
+    const jump = document.createElement("button");
+    jump.type = "button";
+    jump.textContent = "対象へ移動";
+    jump.disabled = displayTarget.missing || !displayTarget.target || !displayTarget.target.startLine;
+    jump.addEventListener("click", () => scrollToTarget(displayTarget.target));
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.textContent = comment.status === "resolved" ? "未対応に戻す" : "解決済みにする";
+    toggle.addEventListener("click", () => addAndSaveEvent({
+      id: randomId(),
+      type: "comment:status",
+      commentId: comment.id,
+      status: comment.status === "resolved" ? "open" : "resolved",
+      createdAt: new Date().toISOString()
+    }));
+    actions.append(jump, toggle);
+    card.append(meta, quote, body, replies, replyForm, actions);
+    return card;
+  }
+
+  function getSectionLabel(target) {
+    return target && target.section && target.section.title ? `章: ${target.section.title}` : "";
+  }
+
+  function renderReplies(comment) {
+    const list = document.createElement("div");
+    list.className = "reply-list";
+    for (const reply of (comment.replies || []).slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
+      const item = document.createElement("div");
+      item.className = "reply-item";
+      const meta = document.createElement("div");
+      meta.className = "reply-meta";
+      meta.textContent = `${reply.author || "reviewer"} / ${formatDate(reply.createdAt)}`;
+      const body = document.createElement("div");
+      body.className = "reply-body";
+      body.textContent = reply.body;
+      item.append(meta, body);
+      list.appendChild(item);
+    }
+    return list;
+  }
+
+  function renderReplyForm(comment) {
+    const form = document.createElement("div");
+    form.className = "reply-form";
+    const textarea = document.createElement("textarea");
+    textarea.rows = 2;
+    textarea.placeholder = "返信を書く";
+    const submit = document.createElement("button");
+    submit.type = "button";
+    submit.textContent = "返信";
+    submit.addEventListener("click", () => {
+      const body = textarea.value.trim();
+      if (!body) {
+        textarea.focus();
+        return;
+      }
+      const now = new Date().toISOString();
+      addAndSaveEvent({
+        id: randomId(),
+        type: "reply:create",
+        commentId: comment.id,
+        createdAt: now,
+        reply: {
+          id: randomId(),
+          body,
+          author: state.user ? state.user.author : "reviewer",
+          createdAt: now,
+          updatedAt: now
+        }
+      });
+    });
+    form.append(textarea, submit);
+    return form;
+  }
+
+  function buildComments(events) {
+    const comments = new Map();
+    const sorted = dedupeEvents(events).sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+    for (const event of sorted) {
+      if (event.type === "comment:create" && event.comment && event.comment.id && !comments.has(event.comment.id)) {
+        comments.set(event.comment.id, Object.assign({}, event.comment, {
+          status: event.comment.status || "open",
+          replies: Array.isArray(event.comment.replies) ? event.comment.replies.slice() : []
+        }));
+      }
+    }
+    for (const event of sorted) {
+      if (event.type === "comment:status" && comments.has(event.commentId)) {
+        const comment = comments.get(event.commentId);
+        comment.status = event.status;
+        comment.updatedAt = event.createdAt || comment.updatedAt;
+      }
+      if (event.type === "reply:create" && comments.has(event.commentId) && event.reply) {
+        const comment = comments.get(event.commentId);
+        if (!comment.replies.some(reply => reply.id === event.reply.id)) {
+          comment.replies.push(event.reply);
+          comment.updatedAt = event.createdAt || comment.updatedAt;
+        }
+      }
+    }
+    return Array.from(comments.values());
+  }
+
+  function dedupeEvents(events) {
+    const seen = new Set();
+    return (events || []).filter(event => {
+      if (!event || !event.id || seen.has(event.id)) {
+        return false;
+      }
+      seen.add(event.id);
+      return true;
+    });
+  }
+
+  function getSelectionTarget(selection, quote) {
+    const anchorLine = getClosestLine(selection.anchorNode);
+    const focusLine = getClosestLine(selection.focusNode);
+    if (!anchorLine || !focusLine) {
+      return null;
+    }
+    const startLine = Math.min(Number(anchorLine.dataset.line), Number(focusLine.dataset.line));
+    const endLine = Math.max(Number(anchorLine.dataset.line), Number(focusLine.dataset.line));
+    const target = { type: startLine === endLine ? "text" : "range", startLine, endLine };
+    if (startLine === endLine) {
+      const index = getLineText(startLine).indexOf(quote);
+      if (index >= 0) {
+        target.startColumn = index + 1;
+        target.endColumn = index + quote.length;
+      }
+    }
+    return withAnchor(target, quote);
+  }
+
+  function withAnchor(target, quote) {
+    if (!target) {
+      return null;
+    }
+    return Object.assign({}, target, {
+      anchor: target.anchor || createAnchor(target.startLine, target.endLine || target.startLine, quote, target.startColumn, target.endColumn)
+    });
+  }
+
+  function createAnchor(startLine, endLine, quote, startColumn, endColumn) {
+    const text = getNormalizedText();
+    const offsets = getLineOffsets(text);
+    const startLineIndex = Math.max(0, Number(startLine) - 1);
+    const endLineIndex = Math.max(startLineIndex, Number(endLine || startLine) - 1);
+    let startOffset = offsets[startLineIndex] || 0;
+    let endOffset = getLineEndOffset(text, offsets, endLineIndex);
+    if (Number(startColumn) > 0) {
+      startOffset += Number(startColumn) - 1;
+    }
+    if (Number(endColumn) > 0 && startLineIndex === endLineIndex) {
+      endOffset = (offsets[startLineIndex] || 0) + Number(endColumn);
+    }
+    const needle = quote || text.slice(startOffset, endOffset);
+    return {
+      quote: needle,
+      prefix: text.slice(Math.max(0, startOffset - CONTEXT_CHARS), startOffset),
+      suffix: text.slice(endOffset, endOffset + CONTEXT_CHARS),
+      section: getHeadingContext(startLine),
+      startOffset,
+      endOffset
+    };
+  }
+
+  function resolveCommentTarget(comment) {
+    const anchor = comment.target && comment.target.anchor;
+    const quote = anchor ? anchor.quote : comment.quote;
+    const range = findAnchorRange(getNormalizedText(), anchor || { quote }, anchor && Number.isFinite(anchor.startOffset) ? anchor.startOffset : null);
+    if (!range) {
+      const sectionTarget = resolveSectionTarget(comment.target || {}, anchor);
+      if (sectionTarget) {
+        return { found: true, approximate: true, target: sectionTarget };
+      }
+      return { found: false, target: comment.target || null };
+    }
+    const lines = getLineRangeFromOffsets(getNormalizedText(), range.startOffset, range.endOffset);
+    return { found: true, target: Object.assign({}, comment.target || {}, lines) };
+  }
+
+  function resolveSectionTarget(originalTarget, anchor) {
+    const section = (anchor && anchor.section) || (originalTarget && originalTarget.section);
+    const line = findSectionLine(section);
+    if (!line) {
+      return null;
+    }
+    return Object.assign({}, originalTarget, {
+      type: "section",
+      startLine: line,
+      endLine: line,
+      section
+    });
+  }
+
+  function getHeadingContext(lineNumber) {
+    const headings = parseMarkdownHeadings(getNormalizedText());
+    let current = null;
+    for (const heading of headings) {
+      if (heading.line > Number(lineNumber)) {
+        break;
+      }
+      current = heading;
+    }
+    return current;
+  }
+
+  function findSectionLine(section) {
+    if (!section) {
+      return null;
+    }
+    const ownLine = findBestHeadingLine(section);
+    if (ownLine) {
+      return ownLine;
+    }
+    const ancestors = Array.isArray(section.ancestors) ? section.ancestors.slice().reverse() : [];
+    if (section.parent) {
+      ancestors.unshift(section.parent);
+    }
+    for (const ancestor of ancestors) {
+      const ancestorLine = findBestHeadingLine(ancestor);
+      if (ancestorLine) {
+        return ancestorLine;
+      }
+    }
+    return null;
+  }
+
+  function findBestHeadingLine(section) {
+    if (!section || !section.title) {
+      return null;
+    }
+    const headings = parseMarkdownHeadings(getNormalizedText());
+    let best = null;
+    for (const heading of headings) {
+      if (heading.title !== section.title) {
+        continue;
+      }
+      const levelScore = heading.level === section.level ? 4 : 0;
+      const pathScore = commonPrefixItems(heading.path, section.path) * 3;
+      const distanceScore = Number.isFinite(section.line) ? Math.max(0, 8 - Math.abs(heading.line - section.line)) : 0;
+      const score = levelScore + pathScore + distanceScore;
+      if (!best || score > best.score) {
+        best = { line: heading.line, score };
+      }
+    }
+    return best ? best.line : null;
+  }
+
+  function parseMarkdownHeadings(text) {
+    const headings = [];
+    const stack = [];
+    text.split("\n").forEach((line, index) => {
+      const match = line.match(/^(#{1,6})\s+(.+?)\s*#*\s*$/);
+      if (!match) {
+        return;
+      }
+      const level = match[1].length;
+      const title = match[2].trim();
+      const ancestors = stack.slice(0, level - 1).filter(Boolean).map(toHeadingRef);
+      const current = {
+        line: index + 1,
+        level,
+        title,
+        path: ancestors.map(heading => heading.title).concat(title),
+        parent: ancestors.length > 0 ? ancestors[ancestors.length - 1] : null,
+        ancestors
+      };
+      stack[level - 1] = current;
+      stack.length = level;
+      headings.push(current);
+    });
+    return headings;
+  }
+
+  function toHeadingRef(heading) {
+    return {
+      line: heading.line,
+      level: heading.level,
+      title: heading.title,
+      path: heading.path
+    };
+  }
+
+  function commonPrefixItems(a = [], b = []) {
+    let i = 0;
+    while (i < Math.min(a.length, b.length) && a[i] === b[i]) i += 1;
+    return i;
+  }
+
+  function findAnchorRange(text, anchor, fallbackOffset) {
+    if (!anchor) {
+      return null;
+    }
+    const offsets = findAllOffsets(text, anchor.quote);
+    if (offsets.length === 0) {
+      return findContextAnchorRange(text, anchor, fallbackOffset);
+    }
+    let best = null;
+    for (const startOffset of offsets) {
+      const endOffset = startOffset + anchor.quote.length;
+      const before = text.slice(Math.max(0, startOffset - CONTEXT_CHARS), startOffset);
+      const after = text.slice(endOffset, endOffset + CONTEXT_CHARS);
+      const score = (commonSuffixLength(anchor.prefix || "", before) + commonPrefixLength(anchor.suffix || "", after)) * 10
+        + (fallbackOffset === null ? 0 : Math.max(0, CONTEXT_CHARS - Math.abs(startOffset - fallbackOffset)));
+      if (!best || score > best.score) {
+        best = { startOffset, endOffset, score };
+      }
+    }
+    return best;
+  }
+
+  function findContextAnchorRange(text, anchor, fallbackOffset) {
+    const suffixRange = findRangeByContext(text, anchor.suffix || "", "suffix", fallbackOffset);
+    if (suffixRange) {
+      return suffixRange;
+    }
+    return findRangeByContext(text, anchor.prefix || "", "prefix", fallbackOffset);
+  }
+
+  function findRangeByContext(text, context, type, fallbackOffset) {
+    if (!context || context.trim().length < 4) {
+      return null;
+    }
+    const candidates = findAllOffsets(text, context);
+    if (candidates.length === 0) {
+      return null;
+    }
+    let best = null;
+    for (const index of candidates) {
+      const offset = type === "suffix" ? index : index + context.length;
+      const distanceScore = fallbackOffset === null ? 0 : Math.max(0, CONTEXT_CHARS - Math.abs(offset - fallbackOffset));
+      const score = context.length * 10 + distanceScore;
+      if (!best || score > best.score) {
+        best = {
+          startOffset: offset,
+          endOffset: offset,
+          score
+        };
+      }
+    }
+    return best;
+  }
+
+  function findAllOffsets(text, needle) {
+    const offsets = [];
+    let index = text.indexOf(needle);
+    while (index >= 0) {
+      offsets.push(index);
+      index = text.indexOf(needle, index + Math.max(1, needle.length));
+    }
+    return offsets;
+  }
+
+  function commonPrefixLength(a, b) {
+    let i = 0;
+    while (i < Math.min(a.length, b.length) && a[i] === b[i]) i += 1;
+    return i;
+  }
+
+  function commonSuffixLength(a, b) {
+    let i = 0;
+    while (i < Math.min(a.length, b.length) && a[a.length - 1 - i] === b[b.length - 1 - i]) i += 1;
+    return i;
+  }
+
+  function getCommentLines(comment) {
+    const resolved = resolveCommentTarget(comment);
+    if (resolved.found) {
+      return getTargetLines(resolved.target);
+    }
+    return comment.target && comment.target.anchor ? [] : getTargetLines(comment.target);
+  }
+
+  function getTargetLines(target) {
+    if (!target || !target.startLine) {
+      return [];
+    }
+    const lines = [];
+    for (let line = Number(target.startLine); line <= Number(target.endLine || target.startLine); line += 1) {
+      lines.push(line);
+    }
+    return lines;
+  }
+
+  function getTargetStartLine(comment) {
+    const lines = getCommentLines(comment);
+    return lines.length ? lines[0] : Number.MAX_SAFE_INTEGER;
+  }
+
+  function getDisplayTarget(comment) {
+    if (!state.currentFile || comment.file !== state.currentFile.path) {
+      return { target: comment.target, missing: false };
+    }
+    const resolved = resolveCommentTarget(comment);
+    return {
+      target: resolved.found ? resolved.target : comment.target,
+      missing: !resolved.found && Boolean(comment.target && comment.target.anchor),
+      approximate: Boolean(resolved.approximate)
+    };
+  }
+
+  function scrollToTarget(target) {
+    if (!els.markdownEditor.hidden) {
+      scrollEditorToTarget(target);
+      return;
+    }
+    const lines = getTargetLines(target);
+    const first = getLineElement(lines[0]);
+    if (!first) {
+      return;
+    }
+    els.markdownPreview.querySelectorAll(".jump-line").forEach(line => line.classList.remove("jump-line"));
+    lines.forEach(lineNumber => {
+      const line = getLineElement(lineNumber);
+      if (line) line.classList.add("jump-line");
+    });
+    first.scrollIntoView({ behavior: "smooth", block: "center" });
+    window.setTimeout(() => els.markdownPreview.querySelectorAll(".jump-line").forEach(line => line.classList.remove("jump-line")), 1800);
+  }
+
+  function scrollEditorToTarget(target) {
+    const lines = getTargetLines(target);
+    if (lines.length === 0) {
+      return;
+    }
+    const text = els.markdownEditor.value.replace(/\r\n/g, "\n");
+    const range = getEditorLineRange(text, lines[0], lines[lines.length - 1]);
+    const lineHeight = parseFloat(getComputedStyle(els.markdownEditor).lineHeight) || 22;
+    els.markdownEditor.focus();
+    els.markdownEditor.setSelectionRange(range.start, range.end);
+    els.markdownEditor.scrollTop = Math.max(0, (lines[0] - 3) * lineHeight);
+  }
+
+  function getEditorLineRange(text, startLine, endLine) {
+    const offsets = getLineOffsets(text);
+    const startIndex = Math.max(0, Number(startLine) - 1);
+    const endIndex = Math.max(startIndex, Number(endLine || startLine) - 1);
+    const start = offsets[startIndex] === undefined ? text.length : offsets[startIndex];
+    const end = getLineEndOffset(text, offsets, endIndex);
+    return { start, end };
+  }
+
+  function renderMarkdown(markdown) {
+    const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+    const html = [];
+    let inCode = false;
+    let codeLanguage = "";
+    let codeStartLine = 0;
+    let codeLines = [];
+
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      const lineNumber = index + 1;
+      let content = "";
+
+      const codeFence = line.match(/^```\s*([a-zA-Z0-9_-]+)?\s*$/);
+      if (codeFence) {
+        if (inCode) {
+          html.push(renderCodeBlock(codeStartLine, lineNumber, codeLanguage, codeLines));
+          inCode = false;
+          codeLanguage = "";
+          codeStartLine = 0;
+          codeLines = [];
+        } else {
+          inCode = true;
+          codeLanguage = (codeFence[1] || "").toLowerCase();
+          codeStartLine = lineNumber;
+          codeLines = [];
+        }
+        continue;
+      }
+
+      if (inCode) {
+        codeLines.push(line);
+        continue;
+      }
+
+      if (isTableStart(lines, index)) {
+        const startLine = lineNumber;
+        const tableLines = [line, lines[index + 1]];
+        index += 2;
+        while (index < lines.length && /^\|.+\|$/.test(lines[index])) {
+          tableLines.push(lines[index]);
+          index += 1;
+        }
+        index -= 1;
+        html.push(renderTableBlock(startLine, startLine + tableLines.length - 1, tableLines));
+        continue;
+      }
+
+      if (/^\s*$/.test(line)) {
+        content = '<span class="blank-line">&nbsp;</span>';
+      } else {
+        const heading = line.match(/^(#{1,6})\s+(.+)$/);
+        const list = line.match(/^\s*[-*+]\s+(.+)$/);
+        const quote = line.match(/^>\s?(.+)$/);
+        if (heading) content = renderMarkdownFragment(line, `<h${heading[1].length}>${inlineMarkdown(heading[2])}</h${heading[1].length}>`);
+        else if (list) content = renderMarkdownFragment(line, `<ul><li>${inlineMarkdown(list[1])}</li></ul>`);
+        else if (quote) content = renderMarkdownFragment(line, `<blockquote>${inlineMarkdown(quote[1])}</blockquote>`);
+        else content = renderMarkdownFragment(line, `<p>${inlineMarkdown(line)}</p>`);
+      }
+      html.push(renderSourceLine(lineNumber, content));
+    }
+    if (inCode) {
+      html.push(renderCodeBlock(codeStartLine, lines.length, codeLanguage, codeLines));
+    }
+    return html.join("\n");
+  }
+
+  function renderCodeBlock(startLine, endLine, language, codeLines) {
+    const code = codeLines.join("\n");
+    if (language === "mermaid") {
+      const content = `<div class="mermaid-block" data-mermaid-source="${escapeHtml(code)}"><pre class="mermaid-fallback"><code>${escapeHtml(code)}</code></pre></div>`;
+      return renderSourceLine(startLine, content, endLine);
+    }
+    const languageClass = language ? ` class="language-${escapeHtml(language)}"` : "";
+    return renderSourceLine(startLine, `<pre><code${languageClass}>${escapeHtml(code || " ")}</code></pre>`, endLine);
+  }
+
+  function renderTableBlock(startLine, endLine, tableLines) {
+    if (markdownRenderer) {
+      return renderSourceLine(startLine, markdownRenderer.render(tableLines.join("\n")).trim(), endLine);
+    }
+
+    let content = "<table><thead><tr>";
+    splitTableRow(tableLines[0]).forEach(cell => {
+      content += `<th>${inlineMarkdown(cell)}</th>`;
+    });
+    content += "</tr></thead><tbody>";
+    tableLines.slice(2).forEach(row => {
+      content += "<tr>";
+      splitTableRow(row).forEach(cell => {
+        content += `<td>${inlineMarkdown(cell)}</td>`;
+      });
+      content += "</tr>";
+    });
+    content += "</tbody></table>";
+    return renderSourceLine(startLine, content, endLine);
+  }
+
+  function splitTableRow(line) {
+    return line.replace(/^\||\|$/g, "").split("|").map(cell => cell.trim());
+  }
+
+  function isTableStart(lines, index) {
+    return /^\|.+\|$/.test(lines[index]) && index + 1 < lines.length && /^\|[-:\s|]+\|$/.test(lines[index + 1]);
+  }
+
+  function renderMarkdownFragment(markdown, fallback) {
+    if (!markdownRenderer) {
+      return fallback;
+    }
+    return markdownRenderer.render(markdown).trim();
+  }
+
+  async function renderMermaidDiagrams() {
+    const blocks = els.markdownPreview.querySelectorAll(".mermaid-block");
+    if (blocks.length === 0 || !window.mermaid) {
+      return;
+    }
+    window.mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: "strict",
+      theme: "default"
+    });
+    for (const block of blocks) {
+      const source = block.dataset.mermaidSource || "";
+      const id = `mermaid-${randomId()}`;
+      try {
+        const result = await window.mermaid.render(id, source);
+        block.innerHTML = result.svg;
+        block.classList.add("rendered");
+      } catch (error) {
+        block.classList.add("render-error");
+      }
+    }
+  }
+
+  function renderSourceLine(lineNumber, content, endLine) {
+    const label = endLine && endLine !== lineNumber ? `${lineNumber}-${endLine}` : lineNumber;
+    return `<div class="md-line" data-line="${lineNumber}"><button class="line-number" type="button" data-comment-line="${lineNumber}">${label}</button><div class="md-line-content">${content}</div></div>`;
+  }
+
+  function inlineMarkdown(value) {
+    return escapeHtml(value)
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+      .replace(/!\[([^\]]*)\]\(((?:https?:\/\/|data:image\/)[^)]+)\)/g, '<img src="$2" alt="$1" loading="lazy">')
+      .replace(/!\[([^\]]*)\]\((?!https?:\/\/|data:image\/)([^)]+)\)/g, '<img data-relative-src="$2" alt="$1" loading="lazy">')
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+  }
+
+  function escapeHtml(value) {
+    return String(value || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+  }
+
+  function getClosestLine(node) {
+    const element = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+    return element ? element.closest(".md-line") : null;
+  }
+
+  function getLineElement(lineNumber) {
+    return els.markdownPreview.querySelector(`.md-line[data-line="${lineNumber}"]`);
+  }
+
+  function getLineText(lineNumber) {
+    return getNormalizedText().split("\n")[lineNumber - 1] || "";
+  }
+
+  function getNormalizedText() {
+    return state.currentText.replace(/\r\n/g, "\n");
+  }
+
+  function getLineOffsets(text) {
+    const offsets = [0];
+    for (let i = 0; i < text.length; i += 1) {
+      if (text[i] === "\n") offsets.push(i + 1);
+    }
+    return offsets;
+  }
+
+  function getLineEndOffset(text, offsets, lineIndex) {
+    const next = offsets[lineIndex + 1];
+    return next === undefined ? text.length : Math.max(offsets[lineIndex], next - 1);
+  }
+
+  function getLineRangeFromOffsets(text, startOffset, endOffset) {
+    return {
+      startLine: text.slice(0, startOffset).split("\n").length,
+      endLine: text.slice(0, Math.max(startOffset, endOffset - 1)).split("\n").length
+    };
+  }
+
+  function formatTargetLabel(target, fallback) {
+    if (!target || !target.startLine) {
+      return fallback;
+    }
+    const lineLabel = target.startLine === target.endLine || !target.endLine ? `L${target.startLine}` : `L${target.startLine}-L${target.endLine}`;
+    return target.startColumn && target.endColumn ? `${lineLabel}:${target.startColumn}-${target.endColumn} ${fallback}` : `${lineLabel} ${fallback}`;
+  }
+
+  function downloadCommentsCsv() {
+    const rows = [["type", "file", "target", "status", "author", "body", "createdAt", "parentCommentId", "id"]];
+    for (const comment of state.comments) {
+      rows.push([
+        "comment",
+        comment.file || "",
+        formatTargetLabel(comment.target, comment.quote || ""),
+        comment.status || "",
+        comment.author || "",
+        comment.body || "",
+        comment.createdAt || "",
+        "",
+        comment.id || ""
+      ]);
+      for (const reply of Array.isArray(comment.replies) ? comment.replies : []) {
+        rows.push([
+          "reply",
+          comment.file || "",
+          formatTargetLabel(comment.target, comment.quote || ""),
+          comment.status || "",
+          reply.author || "",
+          reply.body || "",
+          reply.createdAt || "",
+          comment.id || "",
+          reply.id || ""
+        ]);
+      }
+    }
+    const csv = rows.map(row => row.map(escapeCsvCell).join(",")).join("\r\n");
+    const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "comments.csv";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function escapeCsvCell(value) {
+    return `"${String(value ?? "").replace(/"/g, '""')}"`;
+  }
+
+  function formatDate(value) {
+    return new Intl.DateTimeFormat("ja-JP", { dateStyle: "short", timeStyle: "short" }).format(new Date(value));
+  }
+
+  function randomId() {
+    return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+  }
+
+  function setStatus(value) {
+    els.status.textContent = value;
+  }
+
+  function showError(error) {
+    const message = error && error.message ? error.message : String(error);
+    setStatus(`エラー: ${message}`);
+    els.markdownPreview.innerHTML = `<p class="empty">エラーが発生しました: ${escapeHtml(message)}</p>`;
+  }
+
+  function getStoredValue(key) {
+    try {
+      return window.localStorage ? localStorage.getItem(key) : "";
+    } catch (error) {
+      return "";
+    }
+  }
+
+  function setStoredValue(key, value) {
+    try {
+      if (window.localStorage) {
+        localStorage.setItem(key, value);
+      }
+    } catch (error) {
+      // 保存できない環境でも動作は続けます。
+    }
+  }
+})();
+</script>
