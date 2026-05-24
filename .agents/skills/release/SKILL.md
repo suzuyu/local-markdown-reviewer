@@ -183,18 +183,14 @@ git push origin <version>
 
 Then create a GitHub Release using the drafted release notes.
 
-For this repository, attach these local-version release assets:
-
-- `index.html`
-- `app.js`
-- `styles.css`
+For this repository, do not attach local-version release assets manually. Users fetch the local-version files from tag-specific raw GitHub URLs documented in `README.md`.
 
 Do not attach downloaded optional browser bundles such as `mermaid.min.js` or `markdown-it.min.js`; README documents how users can fetch them when needed.
 
 If the user asks an agent to create the release and `gh` is available:
 
 ```sh
-gh release create <version> index.html app.js styles.css --title "<version> - <release-title>" --notes-file <notes-file>
+gh release create <version> --title "<version> - <release-title>" --notes-file <notes-file>
 ```
 
 ## Final Response
