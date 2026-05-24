@@ -128,6 +128,7 @@ Determine the release version before drafting final notes:
 - For the initial public release, prefer `v0.1.0`.
 - For later releases, infer the next SemVer version from existing tags and the change scope, or ask the user.
 - Use placeholders such as `<version>` and `<release-title>` until the user or repository history confirms the exact version.
+- Write release notes in Japanese by default for this repository, including PR release-note drafts and GitHub Release notes. Keep command names, file paths, version numbers, and option names in their original spelling.
 
 Draft release notes with:
 
@@ -138,16 +139,16 @@ Draft release notes with:
 - limitations or notes
 - upgrade/setup notes
 
-For an initial release, this shape is a good default:
+For an initial release, this Japanese shape is a good default:
 
 ```md
-## v0.1.0 - Initial Release
+## v0.1.0 - 初回リリース
 
-### Highlights
+### ハイライト
 
-### Features
+### 主な機能
 
-### Notes
+### 補足
 ```
 
 ## Branch And PR Workflow
