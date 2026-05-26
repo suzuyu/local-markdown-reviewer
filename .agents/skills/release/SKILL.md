@@ -129,6 +129,8 @@ Determine the release version before drafting final notes:
 - For later releases, infer the next SemVer version from existing tags and the change scope, or ask the user.
 - Use placeholders such as `<version>` and `<release-title>` until the user or repository history confirms the exact version.
 - Write release notes in Japanese by default for this repository, including PR release-note drafts and GitHub Release notes. Keep command names, file paths, version numbers, and option names in their original spelling.
+- Separate PR context from publishable GitHub Release notes. The notes file passed to `gh release create --notes-file` must contain only publishable release notes, not PR-only sections such as checks, review notes, or summaries.
+- Before publishing a GitHub Release, confirm the notes file does not contain draft labels such as `案`, `Draft`, `draft`, `<version>`, or `<release-title>`.
 
 Draft release notes with:
 
@@ -183,6 +185,14 @@ git push origin <version>
 ```
 
 Then create a GitHub Release using the drafted release notes.
+
+Before creating the GitHub Release, run a final notes check:
+
+```sh
+rg -n "案|Draft|draft|<version>|<release-title>" <notes-file>
+```
+
+If this command finds any match, rewrite the notes file before publishing. Do not publish release notes that still contain draft markers.
 
 For this repository, do not attach local-version release assets manually. Users fetch the local-version files from tag-specific raw GitHub URLs documented in `README.md`.
 
