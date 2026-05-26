@@ -446,6 +446,7 @@
         if (!comments.has(event.comment.id)) {
           comments.set(event.comment.id, {
             ...event.comment,
+            userId: event.comment.userId || event.userId || "",
             status: event.comment.status || "open",
             replies: Array.isArray(event.comment.replies) ? event.comment.replies.slice() : []
           });
@@ -460,12 +461,43 @@
         comment.updatedAt = event.createdAt || comment.updatedAt;
       }
 
+      if (event.type === "comment:edit" && comments.has(event.commentId)) {
+        const comment = comments.get(event.commentId);
+        comment.body = event.body;
+        comment.updatedAt = event.createdAt || comment.updatedAt;
+        comment.editedAt = event.createdAt || comment.editedAt;
+      }
+
       if (event.type === "reply:create" && comments.has(event.commentId) && event.reply) {
         const comment = comments.get(event.commentId);
         if (!comment.replies.some((reply) => reply.id === event.reply.id)) {
-          comment.replies.push(event.reply);
+          comment.replies.push({
+            ...event.reply,
+            userId: event.reply.userId || event.userId || ""
+          });
           comment.updatedAt = event.createdAt || comment.updatedAt;
         }
+      }
+
+      if (event.type === "reply:edit" && comments.has(event.commentId)) {
+        const comment = comments.get(event.commentId);
+        const reply = comment.replies.find((item) => item.id === event.replyId);
+        if (reply) {
+          reply.body = event.body;
+          reply.updatedAt = event.createdAt || reply.updatedAt;
+          reply.editedAt = event.createdAt || reply.editedAt;
+          comment.updatedAt = event.createdAt || comment.updatedAt;
+        }
+      }
+
+      if (event.type === "reply:delete" && comments.has(event.commentId)) {
+        const comment = comments.get(event.commentId);
+        comment.replies = comment.replies.filter((reply) => reply.id !== event.replyId);
+        comment.updatedAt = event.createdAt || comment.updatedAt;
+      }
+
+      if (event.type === "comment:delete" && comments.has(event.commentId)) {
+        comments.delete(event.commentId);
       }
     }
 
@@ -1318,7 +1350,7 @@
 
     const meta = document.createElement("div");
     meta.className = "comment-meta";
-    meta.textContent = `${comment.author} / ${formatDate(comment.createdAt)} / ${comment.status === "resolved" ? "解決済み" : "未対応"}`;
+    meta.textContent = formatCommentMeta(comment);
 
     const quote = document.createElement("div");
     quote.className = "comment-quote";
@@ -1361,6 +1393,48 @@
     const replyForm = renderReplyForm(comment);
 
     actions.append(jump, toggle);
+    if (canModifyComment(comment)) {
+      const editButton = document.createElement("button");
+      editButton.type = "button";
+      editButton.textContent = "編集";
+      editButton.addEventListener("click", async () => {
+        const nextBody = await openTextEditDialog("コメント編集", comment.body);
+        if (nextBody === null) {
+          return;
+        }
+        const bodyText = nextBody.trim();
+        if (!bodyText || bodyText === comment.body) {
+          return;
+        }
+        addEvent({
+          type: "comment:edit",
+          commentId: comment.id,
+          body: bodyText
+        });
+        renderComments();
+        await persistComments();
+      });
+
+      const deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.className = "danger-button";
+      deleteButton.textContent = "削除";
+      deleteButton.addEventListener("click", async () => {
+        const confirmed = window.confirm("このコメントを削除します。返信も一覧から表示されなくなります。よろしいですか？");
+        if (!confirmed) {
+          return;
+        }
+        addEvent({
+          type: "comment:delete",
+          commentId: comment.id
+        });
+        renderPreviewAnnotations();
+        renderComments();
+        await persistComments();
+      });
+
+      actions.append(editButton, deleteButton);
+    }
     card.append(meta, quote, body, replies, replyForm, actions);
     return card;
   }
@@ -1438,16 +1512,127 @@
 
       const meta = document.createElement("div");
       meta.className = "reply-meta";
-      meta.textContent = `${reply.author || "reviewer"} / ${formatDate(reply.createdAt)}`;
+      meta.textContent = formatReplyMeta(reply);
 
       const body = document.createElement("div");
       body.className = "reply-body";
       body.textContent = reply.body;
 
       item.append(meta, body);
+      if (canModifyReply(reply)) {
+        const actions = document.createElement("div");
+        actions.className = "reply-actions";
+
+        const editButton = document.createElement("button");
+        editButton.type = "button";
+        editButton.textContent = "編集";
+        editButton.addEventListener("click", async () => {
+          const nextBody = await openTextEditDialog("返信編集", reply.body);
+          if (nextBody === null) {
+            return;
+          }
+          const bodyText = nextBody.trim();
+          if (!bodyText || bodyText === reply.body) {
+            return;
+          }
+          addEvent({
+            type: "reply:edit",
+            commentId: comment.id,
+            replyId: reply.id,
+            body: bodyText
+          });
+          renderComments();
+          await persistComments();
+        });
+
+        const deleteButton = document.createElement("button");
+        deleteButton.type = "button";
+        deleteButton.className = "danger-button";
+        deleteButton.textContent = "削除";
+        deleteButton.addEventListener("click", async () => {
+          const confirmed = window.confirm("この返信を削除します。よろしいですか？");
+          if (!confirmed) {
+            return;
+          }
+          addEvent({
+            type: "reply:delete",
+            commentId: comment.id,
+            replyId: reply.id
+          });
+          renderComments();
+          await persistComments();
+        });
+
+        actions.append(editButton, deleteButton);
+        item.append(actions);
+      }
       list.appendChild(item);
     }
     return list;
+  }
+
+  function canModifyComment(comment) {
+    return canModifyByOwner(comment.userId, comment.author);
+  }
+
+  function canModifyReply(reply) {
+    return canModifyByOwner(reply.userId, reply.author);
+  }
+
+  function canModifyByOwner(userId, author) {
+    if (userId) {
+      return userId === state.userId;
+    }
+    return Boolean(author && author === getCurrentAuthor());
+  }
+
+  function openTextEditDialog(title, initialValue) {
+    return new Promise((resolve) => {
+      const dialog = document.createElement("dialog");
+      const form = document.createElement("form");
+      form.method = "dialog";
+      form.className = "comment-form";
+
+      const heading = document.createElement("h2");
+      heading.textContent = title;
+
+      const label = document.createElement("label");
+      label.textContent = "本文";
+
+      const textarea = document.createElement("textarea");
+      textarea.rows = 8;
+      textarea.required = true;
+      textarea.value = initialValue || "";
+
+      const menu = document.createElement("menu");
+
+      const cancel = document.createElement("button");
+      cancel.type = "submit";
+      cancel.value = "cancel";
+      cancel.formNoValidate = true;
+      cancel.textContent = "キャンセル";
+
+      const submit = document.createElement("button");
+      submit.type = "submit";
+      submit.value = "save";
+      submit.textContent = "保存";
+
+      label.append(textarea);
+      menu.append(cancel, submit);
+      form.append(heading, label, menu);
+      dialog.append(form);
+      document.body.appendChild(dialog);
+
+      dialog.addEventListener("close", () => {
+        const value = dialog.returnValue === "save" ? textarea.value : null;
+        dialog.remove();
+        resolve(value);
+      }, { once: true });
+
+      dialog.showModal();
+      textarea.focus();
+      textarea.select();
+    });
   }
 
   function renderReplyForm(comment) {
@@ -1491,6 +1676,33 @@
     return form;
   }
 
+  function formatCommentMeta(comment) {
+    const parts = [
+      comment.author || "reviewer",
+      `作成 ${formatDate(comment.createdAt)}`,
+      comment.status === "resolved" ? "解決済み" : "未対応"
+    ];
+    if (comment.editedAt) {
+      parts.push(`編集済み ${formatDate(comment.editedAt)}`);
+    } else if (comment.updatedAt && comment.updatedAt !== comment.createdAt) {
+      parts.push(`更新 ${formatDate(comment.updatedAt)}`);
+    }
+    return parts.join(" / ");
+  }
+
+  function formatReplyMeta(reply) {
+    const parts = [
+      reply.author || "reviewer",
+      `作成 ${formatDate(reply.createdAt)}`
+    ];
+    if (reply.editedAt) {
+      parts.push(`編集済み ${formatDate(reply.editedAt)}`);
+    } else if (reply.updatedAt && reply.updatedAt !== reply.createdAt) {
+      parts.push(`更新 ${formatDate(reply.updatedAt)}`);
+    }
+    return parts.join(" / ");
+  }
+
   function downloadComments() {
     const blob = new Blob([JSON.stringify({
       version: 3,
@@ -1510,7 +1722,7 @@
   }
 
   function downloadCommentsCsv() {
-    const rows = [["type", "file", "target", "status", "author", "body", "createdAt", "parentCommentId", "id"]];
+    const rows = [["type", "file", "target", "status", "author", "body", "createdAt", "updatedAt", "editedAt", "parentCommentId", "id"]];
     for (const comment of state.comments) {
       rows.push([
         "comment",
@@ -1520,6 +1732,8 @@
         comment.author || "",
         comment.body || "",
         comment.createdAt || "",
+        comment.updatedAt || "",
+        comment.editedAt || "",
         "",
         comment.id || ""
       ]);
@@ -1532,6 +1746,8 @@
           reply.author || "",
           reply.body || "",
           reply.createdAt || "",
+          reply.updatedAt || "",
+          reply.editedAt || "",
           comment.id || "",
           reply.id || ""
         ]);
