@@ -737,6 +737,27 @@ h1 {
   margin-top: 10px;
 }
 
+.reply-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.reply-actions button {
+  min-height: 32px;
+  padding: 5px 10px;
+}
+
+.danger-button {
+  border-color: #fca5a5;
+  color: #b91c1c;
+}
+
+.danger-button:hover {
+  background: #fef2f2;
+  border-color: #ef4444;
+}
+
 dialog {
   border: 1px solid var(--line);
   border-radius: 8px;
